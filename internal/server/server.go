@@ -1,10 +1,15 @@
 package server
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
-	"github.com/arushtemirbek/skillpath/internal/health"
+	"github.com/arushtemirbek/skillpath/internal/config"
+	"github.com/arushtemirbek/skillpath/internal/server/health"
+	appmiddleware "github.com/arushtemirbek/skillpath/internal/middleware"
+
 	"github.com/go-chi/chi/v5"
 )
 
@@ -13,23 +18,32 @@ type Server struct {
 	addr   string
 }
 
-func New() *Server {
+func New(cfg *config.Config) *Server {
 	router := chi.NewRouter()
 
-	router.Get("/health", health.Handler)
+	router.Use(appmiddleware.RequestID)
+	router.Use(appmiddleware.Logging)
+
+	healthHandler := health.NewHandler(time.Now())
+
+	router.Get("/health", healthHandler.Health)
+
+	addr := ":" + cfg.HTTP.Port
 
 	return &Server{
 		router: router,
-		addr:   ":8080",
+		addr:   addr,
 	}
 }
 
 func (s *Server) Run() error {
+	url := fmt.Sprintf("http://localhost%s", s.addr)
+
 	slog.Info(
 		"server starting",
-		"url", "http://localhost:8080",
+		"url", url,
 		"addr", s.addr,
-		"health", "http://localhost:8080/health",
+		"health", url+"/health",
 	)
 
 	return http.ListenAndServe(s.addr, s.router)
