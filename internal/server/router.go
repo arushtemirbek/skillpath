@@ -7,11 +7,10 @@ import (
 	"github.com/arushtemirbek/skillpath/internal/config"
 	"github.com/arushtemirbek/skillpath/internal/httperror"
 	"github.com/arushtemirbek/skillpath/internal/middleware"
-	"github.com/arushtemirbek/skillpath/internal/server/health"
 	"github.com/go-chi/chi/v5"
 )
 
-func NewRouter(cfg config.HTTPConfig, log *slog.Logger) *chi.Mux {
+func NewRouter(cfg config.HTTPConfig, log *slog.Logger, generate, checkHealth http.HandlerFunc) *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logging(log))
@@ -23,6 +22,7 @@ func NewRouter(cfg config.HTTPConfig, log *slog.Logger) *chi.Mux {
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		httperror.Write(w, http.StatusMethodNotAllowed, httperror.InvalidRequest, "method not allowed")
 	})
-	router.Get("/health", health.NewHandler().Health)
+	router.Get("/health", checkHealth)
+	router.Post("/roadmaps/generate", generate)
 	return router
 }

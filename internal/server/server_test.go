@@ -22,7 +22,13 @@ func testConfig() config.HTTPConfig {
 func newTestServer() *Server {
 	cfg := testConfig()
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return New(cfg, NewRouter(cfg, log), log)
+	return New(cfg, NewRouter(cfg, log, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+	}, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	}), log)
 }
 
 func TestHTTPRoutes(t *testing.T) {
@@ -31,14 +37,14 @@ func TestHTTPRoutes(t *testing.T) {
 		method, path string
 		status       int
 	}{
-		{"GET", "/health", 200}, {"POST", "/health", 405}, {"GET", "/missing", 404}, {"POST", "/roadmaps/generate", 404},
+		{"GET", "/health", 200}, {"POST", "/health", 405}, {"GET", "/missing", 404}, {"POST", "/roadmaps/generate", 200},
 	} {
 		w := httptest.NewRecorder()
 		s.httpServer.Handler.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
 		if w.Code != tc.status || w.Header().Get("Content-Type") != "application/json" || w.Header().Get("X-Request-ID") == "" {
 			t.Fatalf("response = %d %s", w.Code, w.Body.String())
 		}
-		if tc.status == 200 && strings.TrimSpace(w.Body.String()) != `{"status":"ok"}` {
+		if tc.path == "/health" && tc.status == 200 && strings.TrimSpace(w.Body.String()) != `{"status":"ok"}` {
 			t.Fatal("health does not match specification")
 		}
 	}
