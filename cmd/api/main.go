@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/arushtemirbek/skillpath/internal/config"
 	"github.com/arushtemirbek/skillpath/internal/logger"
@@ -28,7 +31,9 @@ func main() {
 
 	srv := server.New(cfg)
 
-	if err := srv.Run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := srv.Run(ctx); err != nil {
 		slog.Error(
 			"server stopped with error",
 			"error", err,

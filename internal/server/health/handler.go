@@ -2,6 +2,8 @@ package health
 
 import (
 	"encoding/json"
+	"github.com/arushtemirbek/skillpath/internal/httperror"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -45,14 +47,15 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	data, err := json.Marshal(response)
+	if err != nil {
+		slog.Error("failed to encode health response", "error", err)
+		httperror.Write(w, http.StatusInternalServerError, httperror.InternalError, "internal server error")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(
-			w,
-			`{"error":"failed to encode health response"}`,
-			http.StatusInternalServerError,
-		)
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		slog.Error("failed to write health response", "error", err)
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -39,20 +40,37 @@ func Load() (*Config, error) {
 	// переменные могут передаваться напрямую через environment.
 	_ = godotenv.Load()
 
+	timeouts := make(map[string]time.Duration)
+	for _, setting := range []struct {
+		name     string
+		fallback time.Duration
+	}{
+		{"HTTP_READ_TIMEOUT", 5 * time.Second},
+		{"HTTP_WRITE_TIMEOUT", 35 * time.Second},
+		{"HTTP_IDLE_TIMEOUT", 60 * time.Second},
+		{"HTTP_SHUTDOWN_TIMEOUT", 10 * time.Second},
+		{"OPENAI_TIMEOUT", 30 * time.Second},
+	} {
+		duration, err := getDuration(setting.name, setting.fallback)
+		if err != nil {
+			return nil, err
+		}
+		timeouts[setting.name] = duration
+	}
 	cfg := &Config{
 		HTTP: HTTPConfig{
 			Port:            getEnv("HTTP_PORT", "8080"),
-			ReadTimeout:     getDuration("HTTP_READ_TIMEOUT", 5*time.Second),
-			WriteTimeout:    getDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
-			IdleTimeout:     getDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
-			ShutdownTimeout: getDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
+			ReadTimeout:     timeouts["HTTP_READ_TIMEOUT"],
+			WriteTimeout:    timeouts["HTTP_WRITE_TIMEOUT"],
+			IdleTimeout:     timeouts["HTTP_IDLE_TIMEOUT"],
+			ShutdownTimeout: timeouts["HTTP_SHUTDOWN_TIMEOUT"],
 		},
 
 		OpenAI: OpenAIConfig{
 			APIKey:  os.Getenv("OPENAI_API_KEY"),
 			Model:   os.Getenv("OPENAI_MODEL"),
 			BaseURL: getEnv("OPENAI_BASE_URL", "https://api.openai.com"),
-			Timeout: getDuration("OPENAI_TIMEOUT", 30*time.Second),
+			Timeout: timeouts["OPENAI_TIMEOUT"],
 		},
 
 		Log: LogConfig{
@@ -68,6 +86,24 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	for _, setting := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"HTTP_READ_TIMEOUT", c.HTTP.ReadTimeout},
+		{"HTTP_WRITE_TIMEOUT", c.HTTP.WriteTimeout},
+		{"HTTP_IDLE_TIMEOUT", c.HTTP.IdleTimeout},
+		{"HTTP_SHUTDOWN_TIMEOUT", c.HTTP.ShutdownTimeout},
+		{"OPENAI_TIMEOUT", c.OpenAI.Timeout},
+	} {
+		if setting.value <= 0 {
+			return fmt.Errorf("%s must be positive", setting.name)
+		}
+	}
+	if c.HTTP.WriteTimeout <= c.OpenAI.Timeout {
+		return errors.New("HTTP_WRITE_TIMEOUT must exceed OPENAI_TIMEOUT")
+	}
+
 	if c.HTTP.Port == "" {
 		return errors.New("HTTP_PORT is required")
 	}
@@ -93,17 +129,17 @@ func getEnv(key string, defaultValue string) string {
 	return value
 }
 
-func getDuration(key string, defaultValue time.Duration) time.Duration {
+func getDuration(key string, defaultValue time.Duration) (time.Duration, error) {
 	value := os.Getenv(key)
-
 	if value == "" {
-		return defaultValue
+		return defaultValue, nil
 	}
-
 	duration, err := time.ParseDuration(value)
 	if err != nil {
-		return defaultValue
+		return 0, fmt.Errorf("%s: invalid duration: %w", key, err)
 	}
-
-	return duration
+	if duration <= 0 {
+		return 0, fmt.Errorf("%s must be positive", key)
+	}
+	return duration, nil
 }
