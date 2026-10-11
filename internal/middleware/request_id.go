@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
+
+	"github.com/arushtemirbek/skillpath/internal/httperror"
 )
 
-type contextKey string
-
-const requestIDKey contextKey = "request_id"
+type requestIDContextKey struct{}
 
 const requestIDHeader = "X-Request-ID"
 
@@ -17,13 +18,19 @@ func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get(requestIDHeader)
 
-		if requestID == "" {
-			requestID = generateRequestID()
+		if !validRequestID(requestID) {
+			var err error
+			requestID, err = generateRequestID()
+			if err != nil {
+				slog.Error("failed to generate request ID", "error", err)
+				httperror.Write(w, http.StatusInternalServerError, httperror.InternalError, "internal server error")
+				return
+			}
 		}
 
 		ctx := context.WithValue(
 			r.Context(),
-			requestIDKey,
+			requestIDContextKey{},
 			requestID,
 		)
 
@@ -34,7 +41,7 @@ func RequestID(next http.Handler) http.Handler {
 }
 
 func GetRequestID(ctx context.Context) string {
-	requestID, ok := ctx.Value(requestIDKey).(string)
+	requestID, ok := ctx.Value(requestIDContextKey{}).(string)
 	if !ok {
 		return ""
 	}
@@ -42,12 +49,24 @@ func GetRequestID(ctx context.Context) string {
 	return requestID
 }
 
-func generateRequestID() string {
+func generateRequestID() (string, error) {
 	bytes := make([]byte, 8)
 
 	if _, err := rand.Read(bytes); err != nil {
-		return "unknown"
+		return "", err
 	}
 
-	return hex.EncodeToString(bytes)
+	return hex.EncodeToString(bytes), nil
+}
+
+func validRequestID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for _, char := range id {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' || char == '.') {
+			return false
+		}
+	}
+	return true
 }

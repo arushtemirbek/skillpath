@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -21,6 +22,7 @@ type HTTPConfig struct {
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
+	RequestTimeout  time.Duration
 }
 
 type OpenAIConfig struct {
@@ -30,116 +32,80 @@ type OpenAIConfig struct {
 	Timeout time.Duration
 }
 
-type LogConfig struct {
-	Level string
+type LogConfig struct{ Level string }
+
+// Load reads an optional local .env without overriding process environment.
+func Load() (*Config, error) {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// dotenv parser errors can contain values, including secrets.
+		return nil, errors.New("failed to load .env: check file syntax and permissions")
+	}
+	return load(os.LookupEnv)
 }
 
-func Load() (*Config, error) {
-	// Загружаем .env, если файл существует.
-	// Если его нет — это не ошибка, например в production
-	// переменные могут передаваться напрямую через environment.
-	_ = godotenv.Load()
+type lookupEnv func(string) (string, bool)
 
-	timeouts := make(map[string]time.Duration)
+// load keeps configuration parsing independent of process-global environment.
+func load(lookup lookupEnv) (*Config, error) {
+	cfg := &Config{
+		HTTP: HTTPConfig{Port: value(lookup, "HTTP_PORT", "8080")},
+		OpenAI: OpenAIConfig{
+			APIKey:  value(lookup, "OPENAI_API_KEY", ""),
+			Model:   value(lookup, "OPENAI_MODEL", ""),
+			BaseURL: value(lookup, "OPENAI_BASE_URL", "https://api.openai.com"),
+		},
+		Log: LogConfig{Level: strings.ToLower(value(lookup, "LOG_LEVEL", "info"))},
+	}
+	// REQUEST_TIMEOUT is the name from the specification. OPENAI_TIMEOUT is
+	// accepted for compatibility only when REQUEST_TIMEOUT is not set.
+	timeoutKey := "REQUEST_TIMEOUT"
+	if _, exists := lookup(timeoutKey); !exists {
+		if _, legacy := lookup("OPENAI_TIMEOUT"); legacy {
+			timeoutKey = "OPENAI_TIMEOUT"
+		}
+	}
 	for _, setting := range []struct {
 		name     string
 		fallback time.Duration
+		target   *time.Duration
 	}{
-		{"HTTP_READ_TIMEOUT", 5 * time.Second},
-		{"HTTP_WRITE_TIMEOUT", 35 * time.Second},
-		{"HTTP_IDLE_TIMEOUT", 60 * time.Second},
-		{"HTTP_SHUTDOWN_TIMEOUT", 10 * time.Second},
-		{"OPENAI_TIMEOUT", 30 * time.Second},
+		{"HTTP_READ_TIMEOUT", 5 * time.Second, &cfg.HTTP.ReadTimeout},
+		{"HTTP_WRITE_TIMEOUT", 35 * time.Second, &cfg.HTTP.WriteTimeout},
+		{"HTTP_IDLE_TIMEOUT", 60 * time.Second, &cfg.HTTP.IdleTimeout},
+		{"HTTP_SHUTDOWN_TIMEOUT", 10 * time.Second, &cfg.HTTP.ShutdownTimeout},
+		{timeoutKey, 30 * time.Second, &cfg.HTTP.RequestTimeout},
 	} {
-		duration, err := getDuration(setting.name, setting.fallback)
+		parsed, err := parseDuration(lookup, setting.name, setting.fallback)
 		if err != nil {
 			return nil, err
 		}
-		timeouts[setting.name] = duration
+		*setting.target = parsed
 	}
-	cfg := &Config{
-		HTTP: HTTPConfig{
-			Port:            getEnv("HTTP_PORT", "8080"),
-			ReadTimeout:     timeouts["HTTP_READ_TIMEOUT"],
-			WriteTimeout:    timeouts["HTTP_WRITE_TIMEOUT"],
-			IdleTimeout:     timeouts["HTTP_IDLE_TIMEOUT"],
-			ShutdownTimeout: timeouts["HTTP_SHUTDOWN_TIMEOUT"],
-		},
-
-		OpenAI: OpenAIConfig{
-			APIKey:  os.Getenv("OPENAI_API_KEY"),
-			Model:   os.Getenv("OPENAI_MODEL"),
-			BaseURL: getEnv("OPENAI_BASE_URL", "https://api.openai.com"),
-			Timeout: timeouts["OPENAI_TIMEOUT"],
-		},
-
-		Log: LogConfig{
-			Level: getEnv("LOG_LEVEL", "info"),
-		},
-	}
-
+	cfg.OpenAI.Timeout = cfg.HTTP.RequestTimeout
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-
 	return cfg, nil
 }
 
-func (c *Config) Validate() error {
-	for _, setting := range []struct {
-		name  string
-		value time.Duration
-	}{
-		{"HTTP_READ_TIMEOUT", c.HTTP.ReadTimeout},
-		{"HTTP_WRITE_TIMEOUT", c.HTTP.WriteTimeout},
-		{"HTTP_IDLE_TIMEOUT", c.HTTP.IdleTimeout},
-		{"HTTP_SHUTDOWN_TIMEOUT", c.HTTP.ShutdownTimeout},
-		{"OPENAI_TIMEOUT", c.OpenAI.Timeout},
-	} {
-		if setting.value <= 0 {
-			return fmt.Errorf("%s must be positive", setting.name)
-		}
+func value(lookup lookupEnv, key, fallback string) string {
+	if result, exists := lookup(key); exists {
+		return result
 	}
-	if c.HTTP.WriteTimeout <= c.OpenAI.Timeout {
-		return errors.New("HTTP_WRITE_TIMEOUT must exceed OPENAI_TIMEOUT")
-	}
-
-	if c.HTTP.Port == "" {
-		return errors.New("HTTP_PORT is required")
-	}
-
-	if c.OpenAI.APIKey == "" {
-		return errors.New("OPENAI_API_KEY is required")
-	}
-
-	if c.OpenAI.Model == "" {
-		return errors.New("OPENAI_MODEL is required")
-	}
-
-	return nil
+	return fallback
 }
 
-func getEnv(key string, defaultValue string) string {
-	value := os.Getenv(key)
-
-	if value == "" {
-		return defaultValue
+func parseDuration(lookup lookupEnv, key string, fallback time.Duration) (time.Duration, error) {
+	raw, exists := lookup(key)
+	if !exists {
+		return fallback, nil
 	}
-
-	return value
-}
-
-func getDuration(key string, defaultValue time.Duration) (time.Duration, error) {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue, nil
-	}
-	duration, err := time.ParseDuration(value)
+	result, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, fmt.Errorf("%s: invalid duration: %w", key, err)
+		return 0, fmt.Errorf("%s must be a duration such as 30s", key)
 	}
-	if duration <= 0 {
+	if result <= 0 {
 		return 0, fmt.Errorf("%s must be positive", key)
 	}
-	return duration, nil
+	return result, nil
 }

@@ -5,71 +5,48 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/arushtemirbek/skillpath/internal/config"
-	"github.com/arushtemirbek/skillpath/internal/httperror"
-	appmiddleware "github.com/arushtemirbek/skillpath/internal/middleware"
-	"github.com/arushtemirbek/skillpath/internal/server/health"
-
-	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
-	router          *chi.Mux
-	addr            string
 	httpServer      *http.Server
 	shutdownTimeout time.Duration
+	log             *slog.Logger
 }
 
-func New(cfg *config.Config) *Server {
-	router := chi.NewRouter()
-
-	router.Use(appmiddleware.RequestID)
-	router.Use(appmiddleware.Logging)
-	router.Use(appmiddleware.Recoverer)
-	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		httperror.Write(w, http.StatusNotFound, httperror.InvalidRequest, "route not found")
-	})
-	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		httperror.Write(w, http.StatusMethodNotAllowed, httperror.InvalidRequest, "method not allowed")
-	})
-
-	healthHandler := health.NewHandler(time.Now())
-
-	router.Get("/health", healthHandler.Health)
-
-	addr := ":" + cfg.HTTP.Port
-
+// New configures the HTTP transport; route construction belongs to NewRouter.
+func New(cfg config.HTTPConfig, handler http.Handler, log *slog.Logger) *Server {
 	return &Server{
-		router: router,
-		addr:   addr,
 		httpServer: &http.Server{
-			Addr: addr, Handler: router,
-			ReadTimeout:  cfg.HTTP.ReadTimeout,
-			WriteTimeout: cfg.HTTP.WriteTimeout,
-			IdleTimeout:  cfg.HTTP.IdleTimeout,
+			Addr:              net.JoinHostPort("", cfg.Port),
+			Handler:           handler,
+			ReadTimeout:       cfg.ReadTimeout,
+			ReadHeaderTimeout: cfg.ReadTimeout,
+			WriteTimeout:      cfg.WriteTimeout,
+			IdleTimeout:       cfg.IdleTimeout,
 		},
-		shutdownTimeout: cfg.HTTP.ShutdownTimeout,
+		shutdownTimeout: cfg.ShutdownTimeout,
+		log:             log,
 	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	url := fmt.Sprintf("http://localhost%s", s.addr)
-
-	slog.Info(
-		"server starting",
-		"url", url,
-		"addr", s.addr,
-		"health", url+"/health",
-	)
-
 	if ctx.Err() != nil {
 		return nil
 	}
+	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", s.httpServer.Addr, err)
+	}
+	defer listener.Close()
+	s.log.Info("server started", "addr", listener.Addr().String())
+
 	serveErrors := make(chan error, 1)
-	go func() { serveErrors <- s.httpServer.ListenAndServe() }()
+	go func() { serveErrors <- s.httpServer.Serve(listener) }()
 	select {
 	case err := <-serveErrors:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -77,7 +54,7 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return err
 	case <-ctx.Done():
-		slog.Info("server shutting down")
+		s.log.Info("server shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 		defer cancel()
 		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
@@ -89,7 +66,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
-		slog.Info("server stopped")
+		s.log.Info("server stopped")
 		return nil
 	}
 }

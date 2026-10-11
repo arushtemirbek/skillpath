@@ -13,32 +13,26 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("application stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error(
-			"failed to load config",
-			"error", err,
-		)
-
-		os.Exit(1)
+		return err
 	}
-
-	logger.Setup(cfg.Log.Level)
-	slog.Info(
-		"application starting",
-		"log_level", cfg.Log.Level,
-	)
-
-	srv := server.New(cfg)
-
+	log, err := logger.New(cfg.Log.Level, os.Stdout)
+	if err != nil {
+		return err
+	}
+	// Keep the default logger for helpers that report response write failures.
+	slog.SetDefault(log)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := srv.Run(ctx); err != nil {
-		slog.Error(
-			"server stopped with error",
-			"error", err,
-		)
-
-		os.Exit(1)
-	}
+	log.Info("application starting", "log_level", cfg.Log.Level)
+	handler := server.NewRouter(cfg.HTTP, log)
+	return server.New(cfg.HTTP, handler, log).Run(ctx)
 }

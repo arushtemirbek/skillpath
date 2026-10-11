@@ -1,4 +1,4 @@
-package server
+package httperror
 
 import (
 	"encoding/json"
@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/arushtemirbek/skillpath/internal/apperror"
-	"github.com/arushtemirbek/skillpath/internal/httperror"
 )
 
 func TestErrorMapping(t *testing.T) {
@@ -18,17 +17,17 @@ func TestErrorMapping(t *testing.T) {
 		status int
 		code   string
 	}{
-		{apperror.ErrGoalRequired, 400, httperror.InvalidRequest},
-		{apperror.ErrInvalidRequest, 400, httperror.InvalidRequest},
-		{apperror.ErrUnprocessableEntity, 422, httperror.InvalidRequest},
-		{apperror.ErrLLMRequestFailed, 502, httperror.LLMRequestFailed},
-		{apperror.ErrLLMInvalidResponse, 502, httperror.LLMInvalidResponse},
-		{errors.New("private details"), 500, httperror.InternalError},
+		{apperror.ErrGoalRequired, 400, InvalidRequest},
+		{apperror.ErrInvalidRequest, 400, InvalidRequest},
+		{apperror.ErrUnprocessableEntity, 422, InvalidRequest},
+		{apperror.ErrLLMRequestFailed, 502, LLMRequestFailed},
+		{apperror.ErrLLMInvalidResponse, 502, LLMInvalidResponse},
+		{errors.New("private details"), 500, InternalError},
 	} {
 		w := httptest.NewRecorder()
 		WriteError(w, fmt.Errorf("wrapped: %w", tc.err))
 		var response struct {
-			Error httperror.Detail `json:"error"`
+			Error Detail `json:"error"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)

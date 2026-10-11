@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,7 +39,7 @@ func TestResponseControllerFlush(t *testing.T) {
 
 func TestRecoveryBeforeResponse(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	Recoverer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })).ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))
+	Recoverer(slog.New(slog.NewJSONHandler(io.Discard, nil)))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })).ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))
 	if recorder.Code != 500 || recorder.Body.String() != "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"internal server error\"}}\n" {
 		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
 	}
@@ -55,7 +57,7 @@ func TestRecoveryAfterResponse(t *testing.T) {
 			t.Fatal("second response appended")
 		}
 	}()
-	Recoverer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	Recoverer(slog.New(slog.NewJSONHandler(io.Discard, nil)))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("partial"))
 		panic("boom")
 	})).ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))

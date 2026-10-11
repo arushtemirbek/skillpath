@@ -1,32 +1,16 @@
 package logger
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
-	"os"
 )
 
-func Setup(level string) {
+// New constructs a JSON logger without changing the process-global logger.
+func New(level string, output io.Writer) (*slog.Logger, error) {
 	var logLevel slog.Level
-
-	switch level {
-	case "debug":
-		logLevel = slog.LevelDebug
-	case "warn":
-		logLevel = slog.LevelWarn
-	case "error":
-		logLevel = slog.LevelError
-	default:
-		logLevel = slog.LevelInfo
+	if err := logLevel.UnmarshalText([]byte(level)); err != nil {
+		return nil, fmt.Errorf("invalid log level: %w", err)
 	}
-
-	handler := slog.NewTextHandler(
-		os.Stdout,
-		&slog.HandlerOptions{
-			Level: logLevel,
-		},
-	)
-
-	log := slog.New(handler)
-
-	slog.SetDefault(log)
+	return slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{Level: logLevel})), nil
 }
